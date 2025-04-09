@@ -1,8 +1,8 @@
 use aws_sdk_s3::presigning::PresigningConfig;
-use axum::{routing::get, Router, extract::Query};
+use axum::{routing::get, Router, extract::Query, Json};
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client as S3Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::error::Error;
 use std::time::Duration;
@@ -25,6 +25,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 get_upload_url_handler(query, s3_client.clone())
             }
         }),
+    ).route(
+        "/list-images", get({
+            let s3 = s3_client.clone();
+            move || list_images_handler(s3.clone())
+        })
     );
 
     // Define the port
@@ -40,6 +45,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[derive(Deserialize)]
 struct GetUploadUrlParams {
     key: String,
+}
+
+#[derive(Serialize)]
+struct ImageListResponse {
+    images: Vec<String>,
 }
 
 // GET /get-upload-url?key=somepath
@@ -61,4 +71,27 @@ async fn get_upload_url_handler(
         .expect("15 minutes")).await.unwrap();
 
     presigned_req.uri().to_string()
+}
+
+// GET /list-images
+async fn list_images_handler(s3_client: S3Client) -> Json<ImageListResponse> {
+    let bucket = std::env::var("S3_BUCKET_NAME").unwrap();
+
+    let response = s3_client
+        .list_objects_v2()
+        .bucket(&bucket)
+        .prefix("processed/")
+        .send()
+        .await
+        .unwrap();
+
+    let mut keys = Vec::new();
+    for obj in response.contents() {
+        if let Some(key) = obj.key() {
+            let url = format!("https://{bucket}.s3.aazonaws.com/{key}");
+            keys.push(url);
+        }
+    }
+
+    Json(ImageListResponse { images: keys })
 }
